@@ -54,6 +54,10 @@ const sidebarDrawerSearchInput = document.getElementById("sidebarDrawerSearchInp
 const sidebarDrawerList = document.getElementById("sidebarDrawerList");
 
 const hamburgerBtn = document.getElementById("hamburgerBtn");
+const sidebarOverlay = document.getElementById("sidebarOverlay");
+const sidebarCloseBtn = document.getElementById("sidebarCloseBtn");
+const sidebarEl = document.getElementById("sidebar");
+const mobileLayoutMq = window.matchMedia("(max-width: 720px)");
 
 // ------------------------
 // Leaflet setup
@@ -776,18 +780,24 @@ function positionDesktopCardBesideMarker(p, opts = {}) {
   const cardH = desktopCard.getBoundingClientRect().height || 240;
 
   const margin = 12;
+  const safeTop = 12;
+  const safeBottom = 12;
 
-  const sidebarW = 320;
-  const sidebarGap = 14;
+  const sidebarW = isMobileLayout() ? 0 : 320;
+  const sidebarGap = isMobileLayout() ? 0 : 14;
   const minLeft = sidebarW + sidebarGap;
-  const maxLeft = viewportW - cardW - margin;
+  const maxLeft = Math.max(margin, viewportW - cardW - margin);
 
-  // Top-left of the card starts at the marker coordinate.
   let left = pt.x;
   let top = pt.y;
 
-  left = Math.max(minLeft, Math.min(left, maxLeft));
-  top = Math.max(margin, Math.min(top, viewportH - cardH - margin));
+  if (isMobileLayout()) {
+    left = Math.max(margin, Math.min((viewportW - cardW) / 2, maxLeft));
+    top = Math.max(safeTop, viewportH - cardH - safeBottom);
+  } else {
+    left = Math.max(minLeft, Math.min(left, maxLeft));
+    top = Math.max(margin, Math.min(top, viewportH - cardH - margin));
+  }
 
   desktopCard.style.left = "0px";
   desktopCard.style.top = "0px";
@@ -903,10 +913,11 @@ function renderSidebarList() {
     }
     openProjectCard(proj);
 
-    // Close drawer on mobile selection
+    // Close drawer / mobile sidebar on selection
     if (sidebarDrawer && sidebarDrawer.hidden === false) {
       closeSidebarDrawer();
     }
+    closeMobileSidebar();
   };
 
   // attach once using named handler flags
@@ -1163,19 +1174,56 @@ function openProjectFromId(id) {
   }
 }
 
+function isMobileLayout() {
+  return mobileLayoutMq.matches;
+}
+
+function setMobileSidebarOpen(open) {
+  if (!sidebarEl) return;
+  sidebarEl.classList.toggle("is-open", open);
+  document.body.classList.toggle("is-sidebar-open", open);
+  if (sidebarOverlay) sidebarOverlay.hidden = !open;
+  if (hamburgerBtn) hamburgerBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (isMobileLayout()) {
+    sidebarEl.setAttribute("aria-hidden", open ? "false" : "true");
+  } else {
+    sidebarEl.removeAttribute("aria-hidden");
+  }
+  if (!open) closeAreaPanel();
+}
+
+function openMobileSidebar() {
+  if (!isMobileLayout()) return;
+  setMobileSidebarOpen(true);
+}
+
+function closeMobileSidebar() {
+  setMobileSidebarOpen(false);
+}
+
+function toggleMobileSidebar() {
+  if (!sidebarEl) return;
+  if (sidebarEl.classList.contains("is-open")) closeMobileSidebar();
+  else openMobileSidebar();
+}
+
+function syncMobileChrome() {
+  if (hamburgerBtn) hamburgerBtn.hidden = !isMobileLayout();
+  if (!isMobileLayout()) closeMobileSidebar();
+}
+
 /**
  * Mobile sidebar drawer helpers
  */
 function openSidebarDrawer() {
+  openMobileSidebar();
   if (!sidebarDrawer) return;
   sidebarDrawer.hidden = false;
 }
 function closeSidebarDrawer() {
+  closeMobileSidebar();
   if (!sidebarDrawer) return;
   sidebarDrawer.hidden = true;
-  sidebarDrawerSearchInput && (sidebarDrawerSearchInput.value = "");
-  sidebarQuery = "";
-  renderSidebarList();
 }
 
 function wireUI() {
@@ -1270,16 +1318,31 @@ function wireUI() {
     map.on("click", () => closeProjectCard());
   }
 
-  // Mobile hamburger
+  // Mobile hamburger / overlay
   if (hamburgerBtn) {
-    hamburgerBtn.hidden = false;
-    hamburgerBtn.addEventListener("click", () => openSidebarDrawer());
+    hamburgerBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMobileSidebar();
+    });
+  }
+  if (sidebarCloseBtn) {
+    sidebarCloseBtn.addEventListener("click", () => closeMobileSidebar());
+  }
+  if (sidebarOverlay) {
+    sidebarOverlay.addEventListener("click", () => closeMobileSidebar());
   }
   if (sidebarDrawerCloseBtn) {
     sidebarDrawerCloseBtn.addEventListener("click", () => closeSidebarDrawer());
   }
   if (sidebarDrawerOverlay) {
     sidebarDrawerOverlay.addEventListener("click", () => closeSidebarDrawer());
+  }
+
+  syncMobileChrome();
+  if (typeof mobileLayoutMq.addEventListener === "function") {
+    mobileLayoutMq.addEventListener("change", syncMobileChrome);
+  } else if (typeof mobileLayoutMq.addListener === "function") {
+    mobileLayoutMq.addListener(syncMobileChrome);
   }
 
   if (mobileCardCloseBtn) {
