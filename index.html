@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Locator GIS Map</title>
+
+    <!-- Leaflet (map) -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+
+    <!-- MarkerCluster (clustering) -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+
+  <body>
+    <!-- Mobile hamburger -->
+    <button id="hamburgerBtn" class="hamburger" type="button" aria-label="Open project list" hidden>
+      ☰
+    </button>
+
+    <!-- Desktop/Tablet project list sidebar -->
+    <aside id="sidebar" class="sidebar" aria-label="Project list sidebar">
+      <div class="sidebar__header">
+        <div class="sidebar__title">Projects</div>
+
+        <!-- Sidebar search + Area filter -->
+        <div class="sidebar__searchWrap">
+          <div class="sidebar__search">
+            <input
+              id="sidebarSearchInput"
+              class="sidebar__searchInput"
+              type="text"
+              autocomplete="off"
+              placeholder="Search Client / Project / Developer..."
+              aria-label="Search projects in sidebar"
+            />
+
+            <button
+              id="areaFilterBtn"
+              class="areaFilterBtn"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-label="Open filters"
+            >
+              <span class="areaFilterBtn__icon" aria-hidden="true">☰</span>
+            </button>
+
+            <button id="sidebarClearBtn" class="sidebar__clearBtn" type="button" aria-label="Clear sidebar search" hidden>
+              ✕
+            </button>
+          </div>
+
+          <!-- Area filter dropdown -->
+          <div id="areaFilterPanel" class="areaFilterPanel" hidden>
+            <div class="areaFilterPanel__header">
+              <span>Filter by Area</span>
+              <button
+                id="areaFilterCloseBtn"
+                class="areaFilterPanel__close"
+                type="button"
+                aria-label="Close area filter"
+              >
+                ✕
+              </button>
+            </div>
+
+            <select id="areaSelect" class="areaFilterPanel__select" aria-label="Select area">
+              <option value="__ALL__">All areas</option>
+            </select>
+
+            <button id="clearAreaFilterBtn" class="areaFilterPanel__clear" type="button">
+              Clear filters
+            </button>
+          </div>
+        </div>
+
+        <!-- Developer filter -->
+        <div class="devFilter" aria-label="Filter projects by developer" hidden>
+          <label class="devFilter__label" for="developerSelect">Developer</label>
+          <select id="developerSelect" class="devFilter__select">
+            <option value="__ALL__">All developers</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="sidebarList" class="sidebar__list" role="list" aria-label="Projects list">
+        <!-- Filled dynamically -->
+      </div>
+    </aside>
+
+    <!-- Floating project card (single card only) -->
+    <div id="desktopCard" class="desktopCard cardlike" hidden aria-live="polite"></div>
+
+    <!-- Mobile slide-out drawer -->
+    <aside id="sidebarDrawer" class="sidebarDrawer" aria-label="Project list drawer" hidden>
+      <div class="sidebarDrawer__overlay" id="sidebarDrawerOverlay" aria-hidden="true"></div>
+
+      <div class="sidebarDrawer__panel" role="dialog" aria-modal="true" aria-label="Project list drawer">
+        <div class="sidebarDrawer__top">
+          <div class="sidebarDrawer__title">Projects</div>
+          <button id="sidebarDrawerCloseBtn" class="sidebarDrawer__closeBtn" type="button" aria-label="Close drawer">
+            ✕
+          </button>
+        </div>
+
+        <div class="sidebarDrawer__search">
+          <input
+            id="sidebarDrawerSearchInput"
+            class="sidebarDrawer__searchInput"
+            type="text"
+            autocomplete="off"
+            placeholder="Search Client / Project / Developer..."
+            aria-label="Search projects in drawer"
+          />
+        </div>
+
+        <div id="sidebarDrawerList" class="sidebarDrawer__list" role="list" aria-label="Projects drawer list">
+          <!-- Filled dynamically -->
+        </div>
+      </div>
+    </aside>
+
+
+
+    <!-- Map container -->
+    <div id="map" aria-label="GIS Project Locator Map"></div>
+
+    <!-- Top overlay: title + existing map controls -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand__title">Project Locator</div>
+        <div class="brand__subtitle">GIS Dashboard (Leaflet + Clustering)</div>
+      </div>
+
+    <!-- Search + Filters -->
+    <div class="search" role="search">
+
+      <!-- Search bar + Area filter button -->
+      <div class="search__toolbar">
+
+        <div class="search__inputWrap">
+          <span class="search__icon" aria-hidden="true">⌕</span>
+
+          <input
+            id="searchInput"
+            class="search__input"
+            type="text"
+            autocomplete="off"
+            placeholder="Search by Project Name or Developer..."
+            aria-label="Search projects by Project Name or Developer"
+          />
+
+          <button
+            id="resetSearchBtn"
+            class="search__reset"
+            type="button"
+            aria-label="Clear search"
+          >
+            ✕
+          </button>
+        </div>
+
+      </div>
+
+      <!-- Results dropdown -->
+      <div
+        id="searchDropdown"
+        class="search__dropdown"
+        role="listbox"
+        aria-label="Search results"
+      >
+        <!-- Filled dynamically -->
+      </div>
+
+    </div>
+
+      <!-- Status row -->
+      <div class="statusRow">
+        <div class="pill" id="markerCountPill" aria-live="polite">
+          <span class="pill__label">Markers:</span>
+          <span class="pill__value">0</span>
+        </div>
+
+        <button id="resetViewBtn" class="btn btn--secondary" type="button" title="Reset map view">
+          Reset View
+        </button>
+      </div>
+    </header>
+
+    <!-- Loading overlay -->
+    <div id="loadingOverlay" class="overlay overlay--loading" aria-live="polite" aria-busy="true">
+      <div class="overlay__inner">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="overlay__text">Loading projects…</div>
+      </div>
+    </div>
+
+    <!-- Error overlay -->
+    <div id="errorOverlay" class="overlay overlay--error" role="alert" hidden>
+      <div class="overlay__title">Could not load project data</div>
+      <div id="errorMessage" class="overlay__message"></div>
+      <button id="retryBtn" class="btn btn--primary" type="button">Retry</button>
+    </div>
+
+    <!-- Empty state overlay -->
+    <div id="emptyOverlay" class="overlay overlay--empty" aria-live="polite" hidden>
+      <div class="overlay__title">No projects found</div>
+      <div class="overlay__message">
+        The dataset loaded, but there are no valid coordinates to display on the map.
+      </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+
+    <!-- MarkerCluster JS -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
