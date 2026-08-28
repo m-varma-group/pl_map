@@ -77,7 +77,8 @@ let selectedArea = "__ALL__";
 
 // Sidebar filtering query
 let sidebarQuery = "";
-let selectedProjectId = null;
+let selectedProjectId = null; // sidebar-selected project
+let activeProjectId = null; // project whose details card is open
 
 // Track last bounds so "Reset View" can restore
 let lastBounds = null;
@@ -323,16 +324,7 @@ function renderSearchDropdown(results) {
       const marker = p._marker;
       if (!marker) return;
 
-      // Open shared card instead of relying on Leaflet popup
-      try {
-        markerCluster?.zoomToShowLayer(marker, () => {
-          openProjectCard(p);
-        });
-      } catch {
-        map?.setView(marker.getLatLng(), Math.max(map.getZoom(), 14), { animate: true });
-        openProjectCard(p);
-      }
-
+      selectProjectFromList(p);
       closeDropdown();
     };
 
@@ -363,6 +355,7 @@ function closeDropdown() {
  */
 function openProjectCard(p) {
   selectedProjectId = p.id;
+  activeProjectId = p.id;
 
   if (!desktopCard) {
     renderSidebarList();
@@ -435,8 +428,8 @@ function openProjectCard(p) {
  * Closes shared cards.
  */
 function closeProjectCard() {
-  const p = getCurrentlySelectedProject();
-  selectedProjectId = null;
+  const p = getActiveProject() || getCurrentlySelectedProject();
+  activeProjectId = null;
 
   if (desktopCard && !desktopCard.hidden) {
     desktopCard.classList.remove("desktopCard--open");
@@ -553,7 +546,8 @@ async function fetchProjects() {
 // ------------------------
 function initMap() {
   // Default view (will be auto-fit after markers are added)
-  map = L.map("map", { zoomControl: true });
+  // Match tile-layer maxZoom (19) so sidebar focus can zoom in tightly.
+  map = L.map("map", { zoomControl: true, maxZoom: 19 });
 
   // Wire card-follow behavior
   // (positioning uses transform; card content is injected on selection)
@@ -597,7 +591,8 @@ function initMap() {
   // ------------------------
   markerCluster = L.markerClusterGroup({
     chunkedLoading: true,
-    showCoverageOnHover: false
+    showCoverageOnHover: false,
+    disableClusteringAtZoom: 18
   });
 
   markerCluster.addTo(map);
@@ -690,19 +685,11 @@ function renderMarkers(loadedProjects) {
       icon: createPurpleMarkerIcon(p)
     });
 
-    // Shared card UI (no popup reliance)
+    // Marker click is the only action that opens the details card
     marker.on("click", () => {
-      // Active marker visuals (no bounce, smooth via CSS)
-      projects.forEach((x) => {
-        if (x && x._marker && x._marker._icon) {
-          x._marker._icon.classList.remove("project-bubble-marker--active");
-        }
-      });
-
-      // Apply active to clicked project.
-      // marker._icon is the element Leaflet uses to wrap our divIcon HTML.
-      marker._icon?.classList.add("project-bubble-marker--active");
-
+      selectedProjectId = p.id;
+      activeProjectId = p.id;
+      setActiveMarkerVisual(p);
       openProjectCard(p);
 
       try {
@@ -750,6 +737,7 @@ function renderMarkers(loadedProjects) {
  */
 function resetView() {
   if (!map || !lastBounds) return;
+  restoreFilteredMarkers();
   map.fitBounds(lastBounds, { padding: [50, 50], animate: true });
 }
 
@@ -757,6 +745,134 @@ function resetView() {
 function getCurrentlySelectedProject() {
   if (!selectedProjectId) return null;
   return projects.find((x) => String(x.id) === String(selectedProjectId)) || null;
+}
+
+/** Returns the project whose details card is currently open. */
+function getActiveProject() {
+  if (!activeProjectId) return null;
+  return projects.find((x) => String(x.id) === String(activeProjectId)) || null;
+}
+
+function clearActiveMarkerVisuals() {
+  projects.forEach((x) => {
+    if (x && x._marker && x._marker._icon) {
+      x._marker._icon.classList.remove("project-bubble-marker--active");
+    }
+  });
+}
+
+function setActiveMarkerVisual(p) {
+  clearActiveMarkerVisuals();
+  p?._marker?._icon?.classList.add("project-bubble-marker--active");
+  try {
+    p?._marker?.bringToFront?.();
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Temporarily show only the focused project's existing marker
+ * so nearby pins do not crowd the high-zoom viewport.
+ * Reuses the same Leaflet marker objects (no duplicates).
+ * @param {Project} p
+ */
+function isolateProjectMarker(p) {
+  if (!markerCluster || !p || !p._marker) return;
+  for (const x of projects) {
+    if (!x || !x._marker) continue;
+    const selected = String(x.id) === String(p.id);
+    const onMap = markerCluster.hasLayer(x._marker);
+    if (selected) {
+      if (!onMap) markerCluster.addLayer(x._marker);
+    } else if (onMap) {
+      markerCluster.removeLayer(x._marker);
+    }
+  }
+}
+
+function restoreFilteredMarkers() {
+  if (!markerCluster) return;
+  for (const x of filteredProjects) {
+    if (!x || !x._marker) continue;
+    if (!markerCluster.hasLayer(x._marker)) {
+      markerCluster.addLayer(x._marker);
+    }
+  }
+}
+
+/**
+ * Selects a project from the sidebar/search list:
+ * highlight + focus marker, but do not open the details card.
+ * @param {Project} p
+ */
+function selectProjectFromList(p) {
+  if (!p || !p._marker) return;
+
+  selectedProjectId = p.id;
+  activeProjectId = null;
+  closeProjectCard();
+  renderSidebarList();
+  focusProjectMarker(p);
+}
+
+/**
+ * Highest zoom the map can use without exceeding tile-layer limits.
+ * @returns {number}
+ */
+function getProjectFocusZoom() {
+  if (!map) return 18;
+  let maxZoom = 18;
+  try {
+    const fromMap = typeof map.getMaxZoom === "function" ? map.getMaxZoom() : 18;
+    if (Number.isFinite(fromMap) && fromMap > 0 && fromMap !== Infinity) {
+      maxZoom = fromMap;
+    }
+  } catch {
+    maxZoom = 18;
+  }
+  return Math.max(maxZoom, 18);
+}
+
+/**
+ * Reveals and focuses a project's existing map marker without opening the card.
+ * Flies to max zoom on the exact coordinates so the logo marker dominates.
+ * @param {Project} p
+ */
+function focusProjectMarker(p) {
+  if (!p || !p._marker || !map) return;
+
+  const marker = p._marker;
+  const latlng = marker.getLatLng();
+  const targetZoom = getProjectFocusZoom();
+
+  isolateProjectMarker(p);
+
+  const markActive = () => setActiveMarkerVisual(p);
+
+  map.once("moveend", () => {
+    if (map.getZoom() < targetZoom) {
+      try {
+        map.setView(latlng, targetZoom, { animate: false });
+      } catch {
+        // ignore
+      }
+    }
+    markActive();
+  });
+
+  try {
+    map.flyTo(latlng, targetZoom, {
+      animate: true,
+      duration: 1.2
+    });
+  } catch {
+    try {
+      map.setView(latlng, targetZoom, { animate: true });
+    } catch {
+      markActive();
+    }
+  }
 }
 
 /**
@@ -905,13 +1021,7 @@ function renderSidebarList() {
     const proj = projects.find((x) => String(x.id) === String(id));
     if (!proj || !proj._marker) return;
 
-    // Zoom + open card
-    try {
-      map?.setView(proj._marker.getLatLng(), Math.max(map.getZoom(), 14), { animate: true });
-    } catch {
-      // ignore
-    }
-    openProjectCard(proj);
+    selectProjectFromList(proj);
 
     // Close drawer / mobile sidebar on selection
     if (sidebarDrawer && sidebarDrawer.hidden === false) {
@@ -986,8 +1096,8 @@ function wireCardFollowEvents() {
 
   const update = () => {
     scheduled = false;
-    const p = lastProject || getCurrentlySelectedProject();
-    if (!p) return;
+    const p = getActiveProject() || lastProject;
+    if (!p || !desktopCard || desktopCard.hidden) return;
     try {
       positionDesktopCardBesideMarker(p);
     } catch {
@@ -1166,12 +1276,7 @@ async function loadAndRender() {
 function openProjectFromId(id) {
   const proj = projects.find((x) => String(x.id) === String(id));
   if (!proj || !proj._marker) return;
-  openProjectCard(proj);
-  try {
-    map?.setView(proj._marker.getLatLng(), Math.max(map.getZoom(), 14), { animate: true });
-  } catch {
-    // ignore
-  }
+  selectProjectFromList(proj);
 }
 
 function isMobileLayout() {
