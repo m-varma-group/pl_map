@@ -57,6 +57,7 @@ const hamburgerBtn = document.getElementById("hamburgerBtn");
 const sidebarOverlay = document.getElementById("sidebarOverlay");
 const sidebarCloseBtn = document.getElementById("sidebarCloseBtn");
 const sidebarEl = document.getElementById("sidebar");
+const clearSelectionBtn = document.getElementById("clearSelectionBtn");
 const mobileLayoutMq = window.matchMedia("(max-width: 720px)");
 
 // ------------------------
@@ -79,6 +80,11 @@ let selectedArea = "__ALL__";
 let sidebarQuery = "";
 let selectedProjectId = null; // sidebar-selected project
 let activeProjectId = null; // project whose details card is open
+/** True while list-focus is hiding other markers (not a data filter). */
+let isolatedForSelection = false;
+/** Ignore zoom-out clear while flyTo / fitBounds / setView are running. */
+let programmaticViewChange = false;
+let programmaticViewTimer = null;
 
 // Track last bounds so "Reset View" can restore
 let lastBounds = null;
@@ -108,6 +114,72 @@ function toNumberOrNull(v) {
 function toCleanString(v) {
   if (v === null || v === undefined) return "";
   return String(v).trim();
+}
+
+/**
+ * Reads a Google Sheet cell by header name, with case-insensitive fallbacks.
+ * @param {Record<string, any>} row
+ * @param {...string} names
+ * @returns {string}
+ */
+function getSheetValue(row, ...names) {
+  if (!row) return "";
+
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) {
+      const value = toCleanString(row[name]);
+      if (value) return value;
+    }
+  }
+
+  const keys = Object.keys(row);
+  for (const name of names) {
+    const target = String(name).trim().toLowerCase();
+    const found = keys.find((k) => String(k).trim().toLowerCase() === target);
+    if (found) {
+      const value = toCleanString(row[found]);
+      if (value) return value;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Returns a trimmed http(s) URL, or empty string if missing/unsafe.
+ * @param {any} value
+ * @returns {string}
+ */
+function toExternalHttpUrl(value) {
+  const url = toCleanString(value);
+  if (!url) return "";
+  const lower = url.toLowerCase();
+  if (lower.startsWith("https://") || lower.startsWith("http://")) return url;
+  return "";
+}
+
+/**
+ * Builds an external CTA link, or empty string if the URL is missing.
+ * Missing links are not rendered (no placeholder/disabled buttons).
+ * @param {string} href
+ * @param {string} label
+ * @param {string} [extraClass]
+ * @returns {string}
+ */
+function popupCtaLink(href, label, extraClass = "") {
+  const url = toExternalHttpUrl(href);
+  if (!url) return "";
+  const className = extraClass ? `popupCtaBtn ${extraClass}` : "popupCtaBtn";
+  return `
+    <a
+      class="${className}"
+      href="${escapeHtml(url)}"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      ${label}
+    </a>
+  `;
 }
 
 /**
@@ -216,21 +288,15 @@ function popupCardHTML(p) {
   const clientName = p.clientName || "—";
   const projectName = p.projectName || "—";
   const address = p.address || "—";
-  // New sheet column: Link
-  const mapsLink = p.mapsLink ? String(p.mapsLink).trim() : "";
 
-  const mapsCTA = mapsLink
-    ? `
-      <a
-        class="mapsCtaBtn"
-        href="${escapeHtml(mapsLink)}"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        📍 Open in Google Maps
-      </a>
-    `
-    : "";
+  // Compact action row: Maps grows into unused space; 360 / YouTube only when a URL exists.
+  const mapsCta = popupCtaLink(p.mapsLink, "📍 Google Maps", "popupCtaBtn--maps");
+  const view360Cta = popupCtaLink(p.link360, "🌐 360° View");
+  const youtubeCta = popupCtaLink(p.youtubeLink, "▶ YouTube");
+  const actionsHTML =
+    mapsCta || view360Cta || youtubeCta
+      ? `<div class="popup-card__actions">${mapsCta}${view360Cta}${youtubeCta}</div>`
+      : "";
 
   return `
     <div class="popup-card cardlike">
@@ -257,7 +323,7 @@ function popupCardHTML(p) {
         <div class="popup-card__project">${escapeHtml(projectName)}</div>
         <div class="popup-card__address">${escapeHtml(address)}</div>
 
-        ${mapsCTA}
+        ${actionsHTML}
       </div>
     </div>
   `;
@@ -469,6 +535,9 @@ function closeProjectCard() {
  * @property {string} description
  * @property {string} imageUrl
  * @property {string} address
+ * @property {string} mapsLink
+ * @property {string} link360
+ * @property {string} youtubeLink
  * @property {string} status
  * @property {L.Marker=} _marker
  */
@@ -501,29 +570,32 @@ async function fetchProjects() {
     throw new Error("Unexpected data format from Google Sheets JSON endpoint.");
   }
 
-  // Map sheet columns to the new schema:
-  // ID, Logo URL, Client Name, Project Name, Developer, Coordinates, Address
+  // LOCATIONS tab columns:
+  // ID, Logo URL, Client Name, Project Name, Developer, Coordinates, Address,
+  // Link (Google Maps), Area, 360 Link, Youtube Link
   const normalized = data
     .map((row) => {
-      const coords = String(row["Coordinates"] || "");
+      const coords = String(getSheetValue(row, "Coordinates") || row["Coordinates"] || "");
       const [lat, lng] = coords
         .split(",")
         .map((v) => parseFloat(v.trim()));
 
       const project = {
-        id: row["ID"],
-        logoUrl: toCleanString(row["Logo URL"]),
-        clientName: toCleanString(row["Client Name"]),
-        projectName: toCleanString(row["Project Name"]),
-        developer: toCleanString(row["Developer"]),
-        area: toCleanString(row["Area"]),
-        address: toCleanString(row["Address"]),
-        mapsLink: toCleanString(row["Link"]),
+        id: getSheetValue(row, "ID") || row["ID"],
+        logoUrl: getSheetValue(row, "Logo URL"),
+        clientName: getSheetValue(row, "Client Name"),
+        projectName: getSheetValue(row, "Project Name"),
+        developer: getSheetValue(row, "Developer"),
+        area: getSheetValue(row, "Area"),
+        address: getSheetValue(row, "Address"),
+        mapsLink: getSheetValue(row, "Link"),
+        link360: getSheetValue(row, "360 Link", "360° Link"),
+        youtubeLink: getSheetValue(row, "Youtube Link", "YouTube Link"),
         lat,
         lng,
 
         // Back-compat fields so existing popupCardHTML doesn't crash (no UI changes requested)
-        imageUrl: toCleanString(row["Logo URL"]),
+        imageUrl: getSheetValue(row, "Logo URL"),
         description: "",
         status: ""
       };
@@ -552,6 +624,7 @@ function initMap() {
   // Wire card-follow behavior
   // (positioning uses transform; card content is injected on selection)
   wireCardFollowEvents();
+  wireSelectionZoomEvents();
 
   // ------------------------
   // Base layers: OSM + Esri Satellite
@@ -679,6 +752,7 @@ function renderMarkers(loadedProjects) {
 
   allMarkers = [];
   markerCluster.clearLayers();
+  isolatedForSelection = false;
 
   for (const p of filteredProjects) {
     const marker = L.marker([p.lat, p.lng], {
@@ -693,6 +767,7 @@ function renderMarkers(loadedProjects) {
       openProjectCard(p);
 
       try {
+        beginProgrammaticView(500);
         map?.setView(marker.getLatLng(), Math.max(map.getZoom(), 14), { animate: true });
       } catch {
         // ignore
@@ -725,6 +800,7 @@ function renderMarkers(loadedProjects) {
   if (allMarkers.length && map) {
     const bounds = L.latLngBounds(allMarkers.map((m) => m.getLatLng()));
     lastBounds = bounds;
+    beginProgrammaticView(800);
     map.fitBounds(bounds, { padding: [50, 50], animate: true });
   }
 
@@ -738,6 +814,7 @@ function renderMarkers(loadedProjects) {
 function resetView() {
   if (!map || !lastBounds) return;
   restoreFilteredMarkers();
+  beginProgrammaticView(800);
   map.fitBounds(lastBounds, { padding: [50, 50], animate: true });
 }
 
@@ -789,6 +866,7 @@ function isolateProjectMarker(p) {
       markerCluster.removeLayer(x._marker);
     }
   }
+  isolatedForSelection = true;
 }
 
 function restoreFilteredMarkers() {
@@ -799,15 +877,63 @@ function restoreFilteredMarkers() {
       markerCluster.addLayer(x._marker);
     }
   }
+  isolatedForSelection = false;
+}
+
+function beginProgrammaticView(durationMs = 1600) {
+  programmaticViewChange = true;
+  if (programmaticViewTimer) window.clearTimeout(programmaticViewTimer);
+  programmaticViewTimer = window.setTimeout(() => {
+    programmaticViewChange = false;
+    programmaticViewTimer = null;
+  }, durationMs);
+}
+
+/**
+ * Zoom at which list-select flies in (map maxZoom, currently 19).
+ * User zoom-out below this releases isolation.
+ */
+function getSelectionReleaseZoom() {
+  return getProjectFocusZoom();
+}
+
+function updateClearSelectionButton() {
+  if (!clearSelectionBtn) return;
+  clearSelectionBtn.hidden = selectedProjectId === null;
+}
+
+/**
+ * Clears list/map selection without deleting project data.
+ * @param {{restoreView?: boolean}} [opts]
+ */
+function clearProjectSelection(opts = {}) {
+  const restoreView = Boolean(opts.restoreView);
+
+  selectedProjectId = null;
+  activeProjectId = null;
+  closeProjectCard();
+  clearActiveMarkerVisuals();
+  restoreFilteredMarkers();
+  renderSidebarList();
+
+  if (restoreView) {
+    resetView();
+  }
 }
 
 /**
  * Selects a project from the sidebar/search list:
  * highlight + focus marker, but do not open the details card.
+ * Clicking the already-selected project clears the selection.
  * @param {Project} p
  */
 function selectProjectFromList(p) {
   if (!p || !p._marker) return;
+
+  if (selectedProjectId !== null && String(selectedProjectId) === String(p.id)) {
+    clearProjectSelection({ restoreView: true });
+    return;
+  }
 
   selectedProjectId = p.id;
   activeProjectId = null;
@@ -847,12 +973,14 @@ function focusProjectMarker(p) {
   const targetZoom = getProjectFocusZoom();
 
   isolateProjectMarker(p);
+  beginProgrammaticView(1600);
 
   const markActive = () => setActiveMarkerVisual(p);
 
   map.once("moveend", () => {
     if (map.getZoom() < targetZoom) {
       try {
+        beginProgrammaticView(400);
         map.setView(latlng, targetZoom, { animate: false });
       } catch {
         // ignore
@@ -1012,6 +1140,7 @@ function renderSidebarList() {
   const html = list.map(renderItem).join("");
   if (sidebarList) sidebarList.innerHTML = html;
   if (sidebarDrawerList) sidebarDrawerList.innerHTML = html;
+  updateClearSelectionButton();
 
   // Wire click handlers (delegated for performance)
   const onClickItem = (e) => {
@@ -1118,6 +1247,32 @@ function wireCardFollowEvents() {
   map.on("zoomend", () => schedule());
   map.on("resize", () => schedule());
   // Cluster expansion changes marker positions during zoom; move/zoom events cover it.
+}
+
+/**
+ * Restore all filtered markers when the user zooms OUT from list-focus zoom.
+ * Programmatic flyTo / fitBounds is ignored via programmaticViewChange.
+ */
+function wireSelectionZoomEvents() {
+  if (!map || map.__selectionZoomWired) return;
+  map.__selectionZoomWired = true;
+
+  let zoomAtGestureStart = map.getZoom();
+
+  map.on("zoomstart", () => {
+    zoomAtGestureStart = map.getZoom();
+  });
+
+  map.on("zoomend", () => {
+    if (programmaticViewChange) return;
+    if (!isolatedForSelection || selectedProjectId === null) return;
+
+    const zoom = map.getZoom();
+    const zoomedOut = zoom < zoomAtGestureStart - 0.05;
+    if (zoomedOut && zoom < getSelectionReleaseZoom()) {
+      clearProjectSelection({ restoreView: false });
+    }
+  });
 }
 
 /**
@@ -1387,6 +1542,13 @@ function wireUI() {
   if (areaFilterPanel) {
     areaFilterPanel.addEventListener("click", (e) => {
       e.stopPropagation();
+    });
+  }
+
+  if (clearSelectionBtn) {
+    clearSelectionBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearProjectSelection({ restoreView: true });
     });
   }
 
