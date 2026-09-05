@@ -251,6 +251,30 @@ body {
   font-weight: 950;
   color: #0b1222;
   letter-spacing: 0.2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.clearSelectionBtn {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  background: rgba(0, 0, 0, 0.03);
+  color: #0b1222;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.clearSelectionBtn:hover {
+  border-color: rgba(124, 58, 237, 0.35);
+  background: rgba(124, 58, 237, 0.06);
+}
+
+.clearSelectionBtn[hidden] {
+  display: none;
 }
 
 .sidebar__mobileClose {
@@ -644,19 +668,39 @@ body {
   word-break: break-word;
 }
 
-/* Open in Google Maps CTA */
+/* Popup action buttons: Google Maps grows into unused 360 / YouTube slots */
+.popup-card__actions {
+  --cta-gap: 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--cta-gap);
+  margin-top: 14px;
+  width: 100%;
+}
+
+.popupCtaBtn,
 .mapsCtaBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 42px;
-  padding: 0 18px;
-  margin-top: 14px;
+  /* Optional buttons keep a one-third slot; Maps overrides below to fill leftovers. */
+  flex: 0 1 calc((100% - (var(--cta-gap) * 2)) / 3);
+  width: calc((100% - (var(--cta-gap) * 2)) / 3);
+  max-width: calc((100% - (var(--cta-gap) * 2)) / 3);
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
   border-radius: 10px;
 
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 
   text-decoration: none;
   cursor: pointer;
@@ -669,7 +713,14 @@ body {
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
+.popupCtaBtn--maps,
+.mapsCtaBtn {
+  flex: 1 1 0;
+  width: auto;
+  max-width: none;
+}
 
+.popupCtaBtn:hover,
 .mapsCtaBtn:hover {
   background: #1d4ed8;
   color: #ffffff;
@@ -677,7 +728,7 @@ body {
   transform: translateY(-1px);
 }
 
-
+.popupCtaBtn:active,
 .mapsCtaBtn:active {
   transform: translateY(0);
 }
@@ -857,6 +908,18 @@ body {
 
   .popup-card__project {
     font-size: 16px;
+  }
+
+  .popup-card__actions {
+    --cta-gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .popupCtaBtn,
+  .mapsCtaBtn {
+    font-size: 11px;
+    height: 36px;
+    padding: 0 6px;
   }
 
   .overlay {
